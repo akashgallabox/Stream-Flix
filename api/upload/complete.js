@@ -1,4 +1,4 @@
-const { getDb, getBucket, checkAuth, json } = require("../../_utils");
+const { getDb, getBucket, checkAuth, json } = require("../_utils");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });

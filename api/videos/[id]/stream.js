@@ -1,6 +1,6 @@
 const https = require("https");
 const http = require("http");
-const { getDb } = require("../../../_utils");
+const { getDb } = require("../../_utils");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") {
