@@ -4,8 +4,8 @@ module.exports = async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
   if (!checkAuth(req))       return json(res, 401, { error: "Unauthorized" });
 
-  const { storagePath, title, description, category, size, duration, durationStr, year, maturityRating } = req.body;
-  if (!storagePath || !title) return json(res, 400, { error: "storagePath and title required" });
+  const { storagePath, fileName, description, category, size, duration, durationStr, year, maturityRating } = req.body;
+  if (!storagePath || !fileName) return json(res, 400, { error: "storagePath and fileName required" });
 
   try {
     const bucket = getBucket();
@@ -18,7 +18,7 @@ module.exports = async function handler(req, res) {
     const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
 
     const newVideo = {
-      title,
+      title: fileName,
       description: description || "Uploaded video",
       duration: Number(duration) || 0,
       durationStr: durationStr || "0m 00s",
