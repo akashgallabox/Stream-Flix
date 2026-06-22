@@ -10,11 +10,12 @@ interface UploadPanelProps {
 export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auth token — same as login password, loaded from .env (never hardcoded)
+  // Tab control: 'file' or 'url'
+  const [activeTab, setActiveTab] = useState<'file' | 'url'>('file');
+
+  // Auth token for protected API routes
   const uploadToken = import.meta.env.VITE_APP_PASSWORD || "";
   const authHeaders = { "Authorization": `Bearer ${uploadToken}` };
-
-  const [activeTab, setActiveTab] = useState<'file' | 'url'>('file');
 
   // File Upload states
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -134,154 +135,83 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
     }
   };
 
-  // 5GB-optimized Chunked upload executor
+  // Firebase Storage signed URL upload
   const handleStartChunkedUpload = async () => {
     if (!selectedFile) return;
 
-    const file = selectedFile;
-    const size = file.size;
-    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
-    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    const file        = selectedFile;
+    const contentType = file.type || "video/mp4";
 
     setSession({
       id: "pending",
-      fileName: file.name,
-      totalSize: size,
-      totalChunks,
+      fileName:      file.name,
+      totalSize:     file.size,
+      totalChunks:   1,
       uploadedChunks: [],
-      progress: 0,
-      speed: 0,
-      eta: 0,
-      status: "uploading"
+      progress:      0,
+      speed:         0,
+      eta:           0,
+      status:        "uploading"
     });
 
     try {
-      // 1. Initializing the upload
+      // 1. Get a signed upload URL from the server
       const initRes = await fetch("/api/upload/init", {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({
-          fileName: file.name,
-          totalSize: size,
-          totalChunks,
-          category,
-          description: description || "Uploaded direct video file.",
-          duration: Number(durationValue)
-        })
+        body:    JSON.stringify({ fileName: file.name, contentType }),
       });
+      if (!initRes.ok) throw new Error("Could not initialize upload session");
+      const { uploadId, signedUrl, storagePath } = await initRes.json();
 
-      if (!initRes.ok) {
-        throw new Error("Could not initialize the upload process on the Express backend.");
-      }
-
-      const { uploadId } = await initRes.json();
-      const startTime = Date.now();
-      let bytesUploaded = 0;
-
-      // Update session with correct generated upload ID
       setSession(prev => prev ? { ...prev, id: uploadId } : null);
 
-      // Save original File pointer to IndexedDB for instant, zero-latency, full-quality playback
-      try {
-        await saveLocalVideoFile(uploadId, file);
-      } catch (idbErr) {
-        console.warn("Could not save video to IndexedDB local pipeline storage:", idbErr);
-      }
+      // 2. PUT the file directly to Firebase Storage via signed URL (with progress)
+      await new Promise<void>((resolve, reject) => {
+        const xhr   = new XMLHttpRequest();
+        const start = Date.now();
 
-      // 2. Loop and upload individual chunks
-      let isBypassed = false;
-      for (let index = 0; index < totalChunks; index++) {
-        // Safe check in case upload is canceled/failed
-        const currentStart = index * CHUNK_SIZE;
-        const currentEnd = Math.min(size, currentStart + CHUNK_SIZE);
-        
-        // Lazy-slice of file pointer (takes 0ms Client-side, doesn't overload memory)
-        const chunkBlob = file.slice(currentStart, currentEnd);
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const percent  = Math.round((e.loaded / e.total) * 100);
+          const elapsed  = (Date.now() - start) / 1000;
+          const speed    = elapsed > 0 ? e.loaded / elapsed : 0;
+          const eta      = speed > 0 ? (e.total - e.loaded) / speed : 0;
+          setSession(prev => prev ? { ...prev, progress: percent, speed, eta } : null);
+        };
 
-        // Upload chunk directly as raw binary stream arrayBuffer
-        let chunkUploadedSuccess = false;
-        let attempts = 0;
+        xhr.onload  = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(`Upload failed: ${xhr.status}`));
+        xhr.onerror = () => reject(new Error("Network error during upload"));
 
-        while (!chunkUploadedSuccess && attempts < 3) {
-          try {
-            const chunkRes = await fetch("/api/upload/chunk", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/octet-stream",
-                "x-upload-id": uploadId,
-                "x-chunk-index": index.toString(),
-                "x-file-name": file.name,
-                "x-total-chunks": totalChunks.toString(),
-                "x-total-size": size.toString(),
-                ...authHeaders
-              },
-              body: chunkBlob
-            });
+        xhr.open("PUT", signedUrl);
+        xhr.setRequestHeader("Content-Type", contentType);
+        xhr.send(file);
+      });
 
-            if (chunkRes.ok) {
-              chunkUploadedSuccess = true;
-            } else {
-              attempts++;
-              // short delay before retry
-              await new Promise(r => setTimeout(r, 1000));
-            }
-          } catch (e) {
-            attempts++;
-            await new Promise(r => setTimeout(r, 1000));
-          }
-        }
-
-        if (!chunkUploadedSuccess) {
-          console.warn(`Server storage exceeded or chunk write failed at chunk #${index}. StreamFlix automatic high-fidelity localized sandbox streaming mode activated.`);
-          isBypassed = true;
-          break; // Exit early and compile immediately — IndexedDB copy is ready to stream with 100% video metrics!
-        }
-
-        bytesUploaded += (currentEnd - currentStart);
-        const elapsed = (Date.now() - startTime) / 1000; // seconds
-        const currentSpeed = elapsed > 0 ? (bytesUploaded / elapsed) : 0; // bytes/sec
-        const progressPercent = Math.round((bytesUploaded / size) * 100);
-        const etaSeconds = currentSpeed > 0 ? ((size - bytesUploaded) / currentSpeed) : 0;
-
-        setSession(prev => {
-          if (!prev) return null;
-          return {
-            ...prev,
-            progress: progressPercent,
-            speed: currentSpeed,
-            eta: etaSeconds,
-            uploadedChunks: [...prev.uploadedChunks, index]
-          };
-        });
-      }
-
-      // 3. Completing & Registering Video representation
+      // 3. Register video metadata in Firestore
       setSession(prev => prev ? { ...prev, status: "merging", progress: 100 } : null);
 
       const completeRes = await fetch("/api/upload/complete", {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({
+        body:    JSON.stringify({
           uploadId,
-          fileName: title + file.name.substring(file.name.lastIndexOf(".")),
+          storagePath,
+          fileName:       title + file.name.substring(file.name.lastIndexOf(".")),
           category,
-          description: description || `Uploaded direct high-fidelity lossless source file: ${selectedFile.name}`,
-          duration: Number(durationValue),
-          durationStr: getEstimatedDurationStr(Number(durationValue)),
+          description:    description || `Uploaded: ${file.name}`,
+          duration:       Number(durationValue),
+          durationStr:    getEstimatedDurationStr(Number(durationValue)),
           year,
-          maturityRating: maturity
-        })
+          maturityRating: maturity,
+        }),
       });
 
-      if (!completeRes.ok) {
-        throw new Error("Failed compiling chunk stream files into target media representation.");
-      }
+      if (!completeRes.ok) throw new Error("Failed to register video");
 
       const completedVideo = await completeRes.json();
-      
       setSession(prev => prev ? { ...prev, status: "completed", progress: 100 } : null);
-      
-      // Clean up parameters
+
       setTimeout(() => {
         onUploadSuccess(completedVideo);
         setSelectedFile(null);
@@ -292,7 +222,7 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
 
     } catch (err: any) {
       console.error(err);
-      setSession(prev => prev ? { ...prev, status: "failed", error: err.message || "An unknown error occured during upload." } : null);
+      setSession(prev => prev ? { ...prev, status: "failed", error: err.message } : null);
     }
   };
 
