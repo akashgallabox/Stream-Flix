@@ -5,8 +5,9 @@ import https from "https";
 import http from "http";
 import { createServer as createViteServer } from "vite";
 import { config as loadEnv } from "dotenv";
+import { getDb, fsReadVideos, fsAddVideo, fsDeleteVideo } from "./src/lib/firebaseAdmin.js";
 
-// Load .env secrets into process.env
+// Load .env secrets into process.env (must be before firebase init)
 loadEnv();
 
 const app = express();
@@ -121,27 +122,67 @@ const INITIAL_VIDEOS = [
   }
 ];
 
-// Initialize DB file
+// Initialize DB file (local fallback)
 if (!fs.existsSync(DB_FILE)) {
   fs.writeFileSync(DB_FILE, JSON.stringify(INITIAL_VIDEOS, null, 2), "utf-8");
 }
 
-const readVideos = () => {
+// ─────────────────────────────────────────────────────────────
+// DATABASE HELPERS — Firestore primary, local db.json fallback
+// ─────────────────────────────────────────────────────────────
+
+/** Read all videos — Firestore if connected, else local db.json */
+const readVideos = async (): Promise<any[]> => {
+  const db = getDb();
+  if (db) {
+    try {
+      return await fsReadVideos();
+    } catch (err) {
+      console.error("[Firestore] Read failed, using local fallback:", err);
+    }
+  }
   try {
     const data = fs.readFileSync(DB_FILE, "utf-8");
     return JSON.parse(data);
-  } catch (error) {
-    console.error("DB read error, using fallback state:", error);
+  } catch {
     return INITIAL_VIDEOS;
   }
 };
 
-const writeVideos = (videos: any[]) => {
-  try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(videos, null, 2), "utf-8");
-  } catch (error) {
-    console.error("DB write error:", error);
+/** Add a video — Firestore if connected, else local db.json */
+const addVideo = async (video: any): Promise<void> => {
+  const db = getDb();
+  if (db) {
+    try {
+      await fsAddVideo(video);
+      return;
+    } catch (err) {
+      console.error("[Firestore] Write failed, using local fallback:", err);
+    }
   }
+  const list = await readVideos();
+  list.unshift(video);
+  fs.writeFileSync(DB_FILE, JSON.stringify(list, null, 2), "utf-8");
+};
+
+/** Delete a video — Firestore if connected, else local db.json */
+const removeVideo = async (id: string): Promise<any | null> => {
+  const list = await readVideos();
+  const video = list.find((v: any) => v.id === id);
+  if (!video) return null;
+
+  const db = getDb();
+  if (db) {
+    try {
+      await fsDeleteVideo(id);
+      return video;
+    } catch (err) {
+      console.error("[Firestore] Delete failed, using local fallback:", err);
+    }
+  }
+  const newList = list.filter((v: any) => v.id !== id);
+  fs.writeFileSync(DB_FILE, JSON.stringify(newList, null, 2), "utf-8");
+  return video;
 };
 
 // Express parsers
@@ -150,19 +191,22 @@ app.use(express.json());
 app.use(express.raw({ type: "application/octet-stream", limit: "20mb" }));
 
 // HTTP REST API routes
-app.get("/api/videos", (req, res) => {
-  const list = readVideos();
-  res.json(list);
+app.get("/api/videos", async (req, res) => {
+  try {
+    const list = await readVideos();
+    res.json(list);
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to load video list." });
+  }
 });
 
 // Create video via manual URL addition  [PROTECTED — requires Bearer token]
-app.post("/api/videos/external", requireUploadAuth, (req, res) => {
+app.post("/api/videos/external", requireUploadAuth, async (req, res) => {
   const { title, description, url, category, duration, durationStr, year, maturityRating } = req.body;
   if (!title || !url) {
     return res.status(400).json({ error: "Title and Stream URL are completely required." });
   }
 
-  const list = readVideos();
   const newVideo = {
     id: "ext-" + Date.now(),
     title,
@@ -181,9 +225,12 @@ app.post("/api/videos/external", requireUploadAuth, (req, res) => {
     maturityRating: maturityRating || "PG-13"
   };
 
-  list.unshift(newVideo);
-  writeVideos(list);
-  res.json(newVideo);
+  try {
+    await addVideo(newVideo);
+    res.json(newVideo);
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to save video." });
+  }
 });
 
 // 1. Initializing chunked upload  [PROTECTED — requires Bearer token]
@@ -282,7 +329,6 @@ app.post("/api/upload/complete", requireUploadAuth, async (req, res) => {
   }
 
   try {
-    const list = readVideos();
     const newVideo = {
       id: uploadId,
       title: fileName.substring(0, fileName.lastIndexOf(".")) || fileName,
@@ -301,8 +347,7 @@ app.post("/api/upload/complete", requireUploadAuth, async (req, res) => {
       maturityRating: maturityRating || "PG-13"
     };
 
-    list.unshift(newVideo);
-    writeVideos(list);
+    await addVideo(newVideo);
 
     res.json(newVideo);
   } catch (err: any) {
@@ -460,32 +505,33 @@ app.get("/api/videos/:id/stream", (req, res) => {
 });
 
 // 5. Delete registered media item  [PROTECTED — requires Bearer token]
-app.delete("/api/videos/:id", requireUploadAuth, (req, res) => {
+app.delete("/api/videos/:id", requireUploadAuth, async (req, res) => {
   const { id } = req.params;
-  const list = readVideos();
-  const index = list.findIndex((v: any) => v.id === id);
 
-  if (index === -1) {
-    return res.status(404).json({ error: "Media uploader details not found." });
-  }
-
-  const [video] = list.splice(index, 1);
-  writeVideos(list);
-
-  if (!video.isExternal) {
-    try {
-      const fileNamePattern = `${id}-`;
-      const files = fs.readdirSync(UPLOADS_DIR);
-      const matchedFile = files.find(file => file.startsWith(fileNamePattern));
-      if (matchedFile) {
-        fs.unlinkSync(path.join(UPLOADS_DIR, matchedFile));
-      }
-    } catch (e) {
-      console.error("Failed to delete local stream representation:", e);
+  try {
+    const video = await removeVideo(id);
+    if (!video) {
+      return res.status(404).json({ error: "Media item not found." });
     }
-  }
 
-  res.json({ success: true, deleted: id });
+    // Also delete local file if it was a local upload
+    if (!video.isExternal) {
+      try {
+        const fileNamePattern = `${id}-`;
+        const files = fs.readdirSync(UPLOADS_DIR);
+        const matchedFile = files.find(file => file.startsWith(fileNamePattern));
+        if (matchedFile) {
+          fs.unlinkSync(path.join(UPLOADS_DIR, matchedFile));
+        }
+      } catch (e) {
+        console.error("Failed to delete local stream file:", e);
+      }
+    }
+
+    res.json({ success: true, deleted: id });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to delete video." });
+  }
 });
 
 // Vite middleware for dev or standard static serving in production
