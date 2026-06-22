@@ -1,0 +1,6 @@
+{
+  "name": "Video Player and Library",
+  "description": "A Netflix-style media player supporting large file chunked uploads, metadata management, and media streaming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
