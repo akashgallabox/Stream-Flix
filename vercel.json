@@ -3,8 +3,8 @@
   "buildCommand": "vite build",
   "outputDirectory": "dist",
   "functions": {
-    "api/**/*.ts": {
-      "includeFiles": "api/_utils.ts"
+    "api/**/*.js": {
+      "includeFiles": "api/_utils.js"
     }
   },
   "rewrites": [
