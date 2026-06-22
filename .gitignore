@@ -6,3 +6,13 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Firebase config with secrets - keep local only
+firebase-applet-config.json
+
+# Uploaded video files - keep local only
+uploads/*.mp4
+uploads/*.mkv
+uploads/*.webm
+uploads/*.avi
+uploads/temp/

@@ -1,11 +1,39 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import path from "path";
 import fs from "fs";
 import https from "https";
 import http from "http";
 import { createServer as createViteServer } from "vite";
+import { config as loadEnv } from "dotenv";
+
+// Load .env secrets into process.env
+loadEnv();
 
 const app = express();
+
+// ──────────────────────────────────────────────────────────
+// UPLOAD PROTECTION MIDDLEWARE
+// All upload/delete routes require Authorization: Bearer <UPLOAD_SECRET_TOKEN>
+// The token is your app login password (set in .env)
+// ──────────────────────────────────────────────────────────
+const UPLOAD_SECRET = process.env.UPLOAD_SECRET_TOKEN || "";
+
+function requireUploadAuth(req: Request, res: Response, next: NextFunction) {
+  if (!UPLOAD_SECRET) {
+    // If no secret is set, block all uploads for safety
+    return res.status(503).json({ error: "Upload service not configured. Set UPLOAD_SECRET_TOKEN in .env" });
+  }
+
+  const authHeader = req.headers["authorization"] || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+  if (token !== UPLOAD_SECRET) {
+    console.warn(`[SECURITY] Unauthorized upload attempt from ${req.ip}`);
+    return res.status(401).json({ error: "Unauthorized. Invalid or missing upload token." });
+  }
+
+  next();
+}
 const PORT = 3000;
 
 // Set up directory paths
@@ -127,8 +155,8 @@ app.get("/api/videos", (req, res) => {
   res.json(list);
 });
 
-// Create video via manual URL addition
-app.post("/api/videos/external", (req, res) => {
+// Create video via manual URL addition  [PROTECTED — requires Bearer token]
+app.post("/api/videos/external", requireUploadAuth, (req, res) => {
   const { title, description, url, category, duration, durationStr, year, maturityRating } = req.body;
   if (!title || !url) {
     return res.status(400).json({ error: "Title and Stream URL are completely required." });
@@ -158,8 +186,8 @@ app.post("/api/videos/external", (req, res) => {
   res.json(newVideo);
 });
 
-// 1. Initializing chunked upload
-app.post("/api/upload/init", (req, res) => {
+// 1. Initializing chunked upload  [PROTECTED — requires Bearer token]
+app.post("/api/upload/init", requireUploadAuth, (req, res) => {
   const { fileName, totalSize, totalChunks } = req.body;
   if (!fileName || !totalSize || !totalChunks) {
     return res.status(400).json({ error: "fileName, totalSize, totalChunks details are mandatory." });
@@ -186,8 +214,8 @@ app.post("/api/upload/init", (req, res) => {
   });
 });
 
-// 2. Accepting binary chunk uploads
-app.post("/api/upload/chunk", (req, res) => {
+// 2. Accepting binary chunk uploads  [PROTECTED — requires Bearer token]
+app.post("/api/upload/chunk", requireUploadAuth, (req, res) => {
   const uploadId = req.headers["x-upload-id"] as string;
   const chunkIndex = req.headers["x-chunk-index"] as string;
   const fileNameHeader = (req.headers["x-file-name"] as string) || "video.mp4";
@@ -230,8 +258,8 @@ app.post("/api/upload/chunk", (req, res) => {
   }
 });
 
-// 3. Merging chunks into finished stream files (now registering)
-app.post("/api/upload/complete", async (req, res) => {
+// 3. Merging chunks into finished stream files  [PROTECTED — requires Bearer token]
+app.post("/api/upload/complete", requireUploadAuth, async (req, res) => {
   const { uploadId, fileName, category, description, durationStr, duration, year, maturityRating } = req.body;
   if (!uploadId || !fileName) {
     return res.status(400).json({ error: "uploadId and fileName are mandatory requirements." });
@@ -431,8 +459,8 @@ app.get("/api/videos/:id/stream", (req, res) => {
   }
 });
 
-// 5. Delete registered media item
-app.delete("/api/videos/:id", (req, res) => {
+// 5. Delete registered media item  [PROTECTED — requires Bearer token]
+app.delete("/api/videos/:id", requireUploadAuth, (req, res) => {
   const { id } = req.params;
   const list = readVideos();
   const index = list.findIndex((v: any) => v.id === id);

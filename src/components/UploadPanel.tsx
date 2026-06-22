@@ -9,8 +9,11 @@ interface UploadPanelProps {
 
 export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
-  // Tab control: 'file' or 'url'
+
+  // Auth token — same as login password, loaded from .env (never hardcoded)
+  const uploadToken = import.meta.env.VITE_APP_PASSWORD || "";
+  const authHeaders = { "Authorization": `Bearer ${uploadToken}` };
+
   const [activeTab, setActiveTab] = useState<'file' | 'url'>('file');
 
   // File Upload states
@@ -156,7 +159,7 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
       // 1. Initializing the upload
       const initRes = await fetch("/api/upload/init", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           fileName: file.name,
           totalSize: size,
@@ -209,7 +212,8 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
                 "x-chunk-index": index.toString(),
                 "x-file-name": file.name,
                 "x-total-chunks": totalChunks.toString(),
-                "x-total-size": size.toString()
+                "x-total-size": size.toString(),
+                ...authHeaders
               },
               body: chunkBlob
             });
@@ -256,7 +260,7 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
 
       const completeRes = await fetch("/api/upload/complete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           uploadId,
           fileName: title + file.name.substring(file.name.lastIndexOf(".")),
@@ -307,7 +311,7 @@ export default function UploadPanel({ onUploadSuccess }: UploadPanelProps) {
     try {
       const res = await fetch("/api/videos/external", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({
           title: extTitle,
           description: extDesc || "Direct external movie stream link.",

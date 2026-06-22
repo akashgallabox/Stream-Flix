@@ -21,6 +21,9 @@ export default function App() {
   const [errorText, setErrorText] = useState("");
   const [notification, setNotification] = useState<{ type: 'success' | 'info', text: string } | null>(null);
 
+  // Upload auth token — same as login password, from .env
+  const uploadToken = import.meta.env.VITE_APP_PASSWORD || "";
+
   // Load videos from backend Express API on launch
   const fetchVideos = async () => {
     setIsLoading(true);
@@ -104,7 +107,8 @@ export default function App() {
 
     try {
       const res = await fetch(`/api/videos/${id}`, {
-        method: "DELETE"
+        method: "DELETE",
+        headers: { "Authorization": `Bearer ${uploadToken}` }
       });
 
       if (!res.ok) {

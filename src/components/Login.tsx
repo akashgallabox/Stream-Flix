@@ -13,8 +13,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const defaultUsername = "Akashktech";
-  const defaultPassword = "Akash@2000#";
+  // Credentials are loaded from .env — never hardcoded in source
+  const defaultUsername = import.meta.env.VITE_APP_USERNAME || "";
+  const defaultPassword = import.meta.env.VITE_APP_PASSWORD || "";
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
