@@ -9,7 +9,9 @@ export default async function handler(req: any, res: any) {
     const videos = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
     return json(res, 200, videos);
   } catch (err: any) {
-    console.error("[GET /api/videos]", err);
-    return json(res, 500, { error: "Failed to load videos" });
+    console.error("[GET /api/videos] Error:", err?.message || err);
+    console.error("[GET /api/videos] Code:", err?.code);
+    return json(res, 500, { error: "Failed to load videos", detail: err?.message });
   }
+
 }

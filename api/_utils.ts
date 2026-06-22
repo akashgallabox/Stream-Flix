@@ -15,18 +15,38 @@ export function initFirebase() {
   }
   const projectId   = process.env.VITE_FIREBASE_PROJECT_ID!;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL!;
-  const privateKey  = (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n");
   const bucket      = process.env.VITE_FIREBASE_STORAGE_BUCKET!;
 
+  // Handle both: literal \n strings (from env vars UI) and already-real newlines (from dotenv)
+  let privateKey = process.env.FIREBASE_PRIVATE_KEY || "";
+  // Remove surrounding quotes if present (Vercel sometimes includes them)
+  if (privateKey.startsWith('"') && privateKey.endsWith('"')) {
+    privateKey = privateKey.slice(1, -1);
+  }
+  // Replace literal \n with real newlines
+  privateKey = privateKey.replace(/\\n/g, "\n");
+
+  if (!projectId || !clientEmail || !privateKey) {
+    console.error("[Firebase] Missing credentials:", { projectId: !!projectId, clientEmail: !!clientEmail, privateKey: !!privateKey });
+    throw new Error("Firebase Admin credentials missing from environment");
+  }
+
   initializeApp({ credential: cert({ projectId, clientEmail, privateKey }), storageBucket: bucket });
+  console.log("[Firebase] ✅ Initialized project:", projectId);
   initialized = true;
 }
 
+
 export function getDb() {
   initFirebase();
-  const databaseId = process.env.VITE_FIREBASE_DATABASE_ID || "(default)";
-  return getFirestore(getApps()[0], databaseId);
+  const databaseId = process.env.VITE_FIREBASE_DATABASE_ID;
+  // Use named database if specified, otherwise default
+  if (databaseId && databaseId !== "(default)") {
+    return getFirestore(getApps()[0], databaseId);
+  }
+  return getFirestore(getApps()[0]);
 }
+
 
 export function getBucket() {
   initFirebase();
