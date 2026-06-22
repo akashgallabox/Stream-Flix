@@ -1,4 +1,4 @@
-import { getDb, getBucket, checkAuth, json } from "../../_utils";
+import { getDb, getBucket, checkAuth, json } from "../_utils";
 
 export default async function handler(req: any, res: any) {
   const { id } = req.query;

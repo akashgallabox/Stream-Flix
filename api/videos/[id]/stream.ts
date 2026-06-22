@@ -1,6 +1,6 @@
 import https from "https";
 import http  from "http";
-import { getDb } from "../../../_utils";
+import { getDb } from "../../_utils";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {

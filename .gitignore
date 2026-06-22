@@ -16,3 +16,4 @@ uploads/*.mkv
 uploads/*.webm
 uploads/*.avi
 uploads/temp/
+.vercel
